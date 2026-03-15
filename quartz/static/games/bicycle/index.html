@@ -1,0 +1,490 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Физический Симулятор Велосипеда (Регулятор Пи)</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --panel-bg: #2d2d2d;
+            --text-color: #f0f0f0;
+            --accent: #4ade80;
+            --accent-hover: #22c55e;
+            --road: #404040;
+            --wheel: #94a3b8;
+            --frame: #ef4444;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            width: 100%;
+            flex-grow: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        }
+
+        #controls {
+            width: 100%;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            box-sizing: border-box;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            border-top: 2px solid #404040;
+            z-index: 10;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            -webkit-appearance: none;
+            background: #404040;
+            height: 8px;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: var(--accent-hover);
+            transform: scale(1.2);
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            background: #1f1f1f;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .stat-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #2d2d2d;
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--accent);
+            margin-top: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <div class="control-group">
+            <label>
+                <span>Тяга / Тормоз (Регулятор скорости)</span>
+                <span id="throttleVal">0 %</span>
+            </label>
+            <input type="range" id="throttleSlider" min="-1" max="1" step="0.05" value="0">
+            <label style="color: #aaa; font-weight: normal; font-size: 12px; margin-top: -5px;">
+                Отрицательное значение - тормоз, положительное - газ.
+            </label>
+        </div>
+
+        <div class="control-group">
+            <label>
+                <span>Форма колёс (Значение Пи)</span>
+                <span id="piVal">3.14</span>
+            </label>
+            <input type="range" id="piSlider" min="2.83" max="4.00" step="0.01" value="3.14">
+            <label style="color: #aaa; font-weight: normal; font-size: 12px; margin-top: -5px;">
+                2.83 (Ромб) ⟷ 3.14 (Круг) ⟷ 4.00 (Квадрат)
+            </label>
+        </div>
+
+        <div class="stats">
+            <div class="stat-box">
+                <span class="stat-label">Скорость</span>
+                <span class="stat-value" id="speedDisp">0.0 км/ч</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">Форма (Степень P)</span>
+                <span class="stat-value" id="pDisp">2.00</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // UI Elements
+        const throttleSlider = document.getElementById('throttleSlider');
+        const piSlider = document.getElementById('piSlider');
+        const throttleVal = document.getElementById('throttleVal');
+        const piVal = document.getElementById('piVal');
+        const speedDisp = document.getElementById('speedDisp');
+        const pDisp = document.getElementById('pDisp');
+
+        // Physics Constants
+        const PIXELS_PER_METER = 120;
+        const G = 9.81;            // Ускорение свободного падения
+        const MASS = 85;           // Масса велосипеда с велосипедистом (кг)
+        const R = 0.35;            // Радиус колеса (м)
+        const L = 1.1;             // Колесная база (расстояние между осями) (м)
+        const C_DRAG = 0.3;        // Аэродинамическое сопротивление (упрощенный коэффициент)
+        const C_ROLL = 0.015;      // Коэффициент трения качения
+        const MAX_FORCE = 800;     // Максимальная сила тяги (Ньютоны)
+        const BRAKE_FORCE = 1500;  // Сила торможения (Ньютоны)
+
+        // State Variables
+        let x = 0;                 // Позиция
+        let v = 0;                 // Скорость (м/с)
+        let alpha_r = 0;           // Угол поворота заднего колеса
+        let alpha_f = 0;           // Угол поворота переднего колеса
+        let p = 2.0;               // Степень формы (2 = круг, бесконечность = квадрат)
+
+        // Resize Canvas
+        function resize() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Mathematics for custom Pi wheels (L_p circles)
+        // Маппинг пользовательского значения Пи в степень p
+        function getPfromPi(pi) {
+            if (pi <= 3.14159) {
+                // от 2.8284 (ромб) до 3.14159 (круг) -> p от 1 до 2
+                return 1 + (pi - 2.8284) / (3.14159 - 2.8284);
+            } else {
+                // от 3.14159 до 4.0 (квадрат) -> p от 2 до бесконечности
+                if (pi >= 3.99) return 50; // Ограничение для стабильности
+                return 1.7168 / (4.0 - pi);
+            }
+        }
+
+        // Параметр q, сопряженный к p (1/p + 1/q = 1)
+        function getQ(p) {
+            if (p === 1) return 10000;
+            return p / (p - 1);
+        }
+
+        // Радиус колеса в зависимости от полярного угла theta
+        function getWheelRadius(theta, p) {
+            if (p >= 50) return R / Math.max(Math.abs(Math.sin(theta)), Math.abs(Math.cos(theta)));
+            const a = Math.abs(Math.sin(theta));
+            const b = Math.abs(Math.cos(theta));
+            const max_val = Math.max(a, b);
+            if (max_val === 0) return 0;
+            return R / (max_val * Math.pow(Math.pow(a/max_val, p) + Math.pow(b/max_val, p), 1/p));
+        }
+
+        // Высота центра колеса от земли в зависимости от угла поворота alpha
+        // Используется опорная функция L_p круга
+        function getWheelHeight(alpha, p) {
+            if (p >= 50) return R * (Math.abs(Math.sin(alpha)) + Math.abs(Math.cos(alpha)));
+            if (p <= 1.001) return R * Math.max(Math.abs(Math.sin(alpha)), Math.abs(Math.cos(alpha)));
+            const q = getQ(p);
+            const a = Math.abs(Math.sin(alpha));
+            const b = Math.abs(Math.cos(alpha));
+            const max_val = Math.max(a, b);
+            if (max_val === 0) return 0;
+            return R * max_val * Math.pow(Math.pow(a/max_val, q) + Math.pow(b/max_val, q), 1/q);
+        }
+
+        // Уклон, создаваемый формой колеса (dy/dx)
+        function getSlope(alpha, p) {
+            const d_alpha = 0.001;
+            const y1 = getWheelHeight(alpha, p);
+            const y2 = getWheelHeight(alpha + d_alpha, p);
+            const dy_dalpha = (y2 - y1) / d_alpha;
+            // Цепное правило: dy/dx = (dy/d_alpha) / (dx/d_alpha) = (dy/d_alpha) / y_c
+            return dy_dalpha / y1; 
+        }
+
+        // Main Physics Update
+        function updatePhysics(dt) {
+            // Чтение значений из UI
+            const targetPi = parseFloat(piSlider.value);
+            p = getPfromPi(targetPi);
+            const throttleInput = parseFloat(throttleSlider.value);
+
+            // 1. Сила от двигателя или тормоза
+            let F_drive = 0;
+            if (throttleInput > 0) {
+                F_drive = throttleInput * MAX_FORCE;
+            } else if (throttleInput < 0) {
+                // Тормоз противодействует текущей скорости
+                if (Math.abs(v) > 0.1) {
+                    F_drive = -Math.sign(v) * Math.abs(throttleInput) * BRAKE_FORCE;
+                }
+            }
+
+            // 2. Сила сопротивления формы (гравитационная работа по подъему центра масс)
+            // Это то самое "влияние формы колёс" с точки зрения физики!
+            const slope_r = getSlope(alpha_r, p);
+            const slope_f = getSlope(alpha_f, p);
+            const avg_slope = (slope_r + slope_f) / 2;
+            const F_shape = - MASS * G * avg_slope;
+
+            // 3. Аэродинамическое сопротивление
+            const F_drag = - C_DRAG * v * Math.abs(v);
+
+            // 4. Трение качения
+            const F_roll = - C_ROLL * MASS * G * Math.sign(v);
+
+            // Суммарная сила и ускорение
+            let F_total = F_drive + F_shape + F_drag;
+            if (Math.abs(v) > 0.01) F_total += F_roll;
+
+            let a = F_total / MASS;
+
+            // Интегрирование (Euler)
+            v += a * dt;
+
+            // Остановка при малых скоростях, если нет тяги (статическое трение)
+            if (Math.abs(v) < 0.1 && throttleInput === 0 && Math.abs(F_shape) < MASS * G * C_ROLL) {
+                v = 0;
+            }
+
+            const dx = v * dt;
+            x += dx;
+
+            // Обновление углов поворота колёс (качение без проскальзывания)
+            // d_alpha = dx / высота_центра
+            const h_r = getWheelHeight(alpha_r, p);
+            const h_f = getWheelHeight(alpha_f, p);
+            
+            if (h_r > 0) alpha_r += dx / h_r;
+            if (h_f > 0) alpha_f += dx / h_f;
+
+            // Нормализация углов
+            alpha_r = alpha_r % (2 * Math.PI);
+            alpha_f = alpha_f % (2 * Math.PI);
+        }
+
+        // Draw Wheel Function
+        function drawWheel(cx, cy, currentAlpha, radiusScale) {
+            ctx.save();
+            ctx.translate(cx, cy);
+            
+            // Draw Tire
+            ctx.beginPath();
+            const segments = 100;
+            for (let i = 0; i <= segments; i++) {
+                const theta = (i / segments) * 2 * Math.PI;
+                const r = getWheelRadius(theta, p) * PIXELS_PER_METER;
+                
+                // Вращаем визуально
+                const rotTheta = theta + currentAlpha;
+                const px = r * Math.cos(rotTheta);
+                const py = r * Math.sin(rotTheta);
+                
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = '#d1d5db';
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(148, 163, 184, 0.2)';
+            ctx.fill();
+
+            // Draw Spokes
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#64748b';
+            for (let i = 0; i < 8; i++) {
+                const theta = (i / 8) * 2 * Math.PI;
+                const r = getWheelRadius(theta, p) * PIXELS_PER_METER;
+                const rotTheta = theta + currentAlpha;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(r * Math.cos(rotTheta), r * Math.sin(rotTheta));
+                ctx.stroke();
+            }
+            
+            // Draw Axle
+            ctx.beginPath();
+            ctx.arc(0, 0, 8, 0, 2*Math.PI);
+            ctx.fillStyle = '#ef4444';
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        // Rendering Loop
+        let lastTime = 0;
+        function loop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            let dt = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            // Ограничение dt для стабильности при свернутой вкладке
+            if (dt > 0.05) dt = 0.05;
+
+            // Физические под-шаги для стабильности острых углов формы
+            const subSteps = 5;
+            const subDt = dt / subSteps;
+            for(let i=0; i<subSteps; i++) {
+                updatePhysics(subDt);
+            }
+
+            // --- ОТРИСОВКА ---
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const groundY = canvas.height - 100;
+            const centerX = canvas.width / 2;
+
+            // 1. Рисуем фон (дорога и маркеры)
+            ctx.fillStyle = '#262626';
+            ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
+            
+            ctx.strokeStyle = '#404040';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(canvas.width, groundY);
+            ctx.stroke();
+
+            // Движущиеся элементы дороги для ощущения скорости
+            ctx.fillStyle = '#525252';
+            const spacing = 2; // каждые 2 метра маркер
+            const offsetX = (x % spacing) * PIXELS_PER_METER;
+            for(let i = -1; i < canvas.width / (spacing * PIXELS_PER_METER) + 2; i++) {
+                const markerX = i * spacing * PIXELS_PER_METER - offsetX;
+                ctx.fillRect(markerX, groundY, 40, 8);
+            }
+
+            // 2. Расчет позиций велосипеда
+            const h_r = getWheelHeight(alpha_r, p);
+            const h_f = getWheelHeight(alpha_f, p);
+
+            const wheelBasePx = L * PIXELS_PER_METER;
+            
+            // Заднее колесо чуть левее центра
+            const s_xr = centerX - wheelBasePx / 2;
+            const s_yr = groundY - h_r * PIXELS_PER_METER;
+            
+            // Переднее колесо правее
+            const s_xf = centerX + wheelBasePx / 2;
+            const s_yf = groundY - h_f * PIXELS_PER_METER;
+
+            // 3. Рисуем раму велосипеда
+            ctx.strokeStyle = 'var(--frame)';
+            ctx.lineWidth = 8;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            // Направляющие векторы для рамы
+            const vx = s_xf - s_xr;
+            const vy = s_yf - s_yr;
+            const len = Math.sqrt(vx*vx + vy*vy);
+            const ux = vx / len;
+            const uy = vy / len;
+            const nx = uy;   // Нормаль вверх (т.к. ось Y вниз)
+            const ny = -ux;
+
+            // Опорные точки рамы
+            const P_bb = { x: s_xr + ux * 0.35 * len + nx * 0.05 * len, y: s_yr + uy * 0.35 * len + ny * 0.05 * len }; // Педальный узел
+            const P_s = { x: s_xr + ux * 0.25 * len + nx * 0.65 * len, y: s_yr + uy * 0.25 * len + ny * 0.65 * len }; // Седло
+            const P_h = { x: s_xr + ux * 0.8 * len + nx * 0.75 * len, y: s_yr + uy * 0.8 * len + ny * 0.75 * len }; // Руль
+
+            // Трубы рамы
+            ctx.beginPath();
+            ctx.moveTo(s_xr, s_yr); ctx.lineTo(P_bb.x, P_bb.y); // нижнее перо
+            ctx.lineTo(P_s.x, P_s.y); // подседельная труба
+            ctx.lineTo(s_xr, s_yr); // верхнее перо
+            
+            ctx.moveTo(P_bb.x, P_bb.y); ctx.lineTo(P_h.x, P_h.y); // нижняя труба
+            ctx.lineTo(P_s.x, P_s.y); // верхняя труба
+            
+            ctx.moveTo(s_xf, s_yf); ctx.lineTo(P_h.x, P_h.y); // вилка
+            ctx.stroke();
+
+            // Руль и Седло
+            ctx.fillStyle = '#111';
+            ctx.beginPath(); ctx.arc(P_s.x, P_s.y, 10, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(P_h.x, P_h.y, 8, 0, Math.PI*2); ctx.fill();
+            ctx.fillRect(P_h.x - 5, P_h.y - 15, 10, 15);
+
+            // 4. Рисуем колеса (рисуются поверх рамы)
+            drawWheel(s_xr, s_yr, alpha_r, p);
+            drawWheel(s_xf, s_yf, alpha_f, p);
+
+            // Обновление UI
+            throttleVal.innerText = (parseFloat(throttleSlider.value) * 100).toFixed(0) + ' %';
+            piVal.innerText = parseFloat(piSlider.value).toFixed(2);
+            speedDisp.innerText = (v * 3.6).toFixed(1) + ' км/ч';
+            
+            let shapeText = p > 40 ? "∞ (Квадрат)" : p.toFixed(2);
+            pDisp.innerText = shapeText;
+
+            requestAnimationFrame(loop);
+        }
+
+        // Запуск
+        requestAnimationFrame(loop);
+
+        // Установка стартовых значений
+        throttleSlider.addEventListener('input', () => {
+            if(Math.abs(throttleSlider.value) < 0.05) throttleSlider.value = 0;
+        });
+
+    </script>
+</body>
+</html>
